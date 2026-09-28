@@ -6,6 +6,7 @@ GitHub Actions の日次cronから実行される想定。
 """
 import os
 import time
+from itertools import zip_longest
 from urllib.parse import quote_plus
 
 import feedparser
@@ -27,10 +28,11 @@ TRUSTED_DOMAINS = [
     "diamond.jp",      # ダイヤモンド・オンライン
 ]
 
-# 経済全体の大きな動き(重要トピック側)
+# 経済全体の大きな動き(重要トピック側)。個別株・企業決算に寄りすぎないよう、
+# 株価そのものより暮らし・政策に近いマクロ指標を中心に選定している。
 MACRO_KEYWORDS = [
-    "経済", "物価", "金利", "円安", "円高", "日銀", "税制", "社会保険",
-    "年金", "最低賃金", "賃上げ", "株価", "インフレ",
+    "物価", "金利", "円安", "円高", "日銀", "税制", "社会保険",
+    "年金", "最低賃金", "賃上げ", "インフレ",
 ]
 
 # FPの活動(家計相談・情報発信)に直結する個人のお金の話題(細かいネタ側)
@@ -59,16 +61,18 @@ SOURCES = [
 
 LOOKBACK_HOURS = 30  # 前回実行からの取りこぼしを防ぐため24時間より広めに取る
 MAX_ARTICLES = 15
+PER_SOURCE_CAP = 6  # 1ソースが枠を独占しないための上限
 
 
 def fetch_matching_entries():
     cutoff = time.time() - LOOKBACK_HOURS * 3600
-    matched = []
     seen_links = set()
     seen_titles = set()
+    by_source = []
 
     for source in SOURCES:
         feed = feedparser.parse(source["url"])
+        source_articles = []
 
         for entry in feed.entries:
             published = entry.get("published_parsed") or entry.get("updated_parsed")
@@ -85,13 +89,24 @@ def fetch_matching_entries():
             seen_links.add(link)
             seen_titles.add(title_key)
 
-            matched.append({
+            source_articles.append({
                 "source": source["name"],
                 "title": title,
                 "link": link,
             })
+            if len(source_articles) >= PER_SOURCE_CAP:
+                break
 
-    return matched
+        by_source.append(source_articles)
+
+    # ソースごとに交互に取り出す(ラウンドロビン)ことで、特定ソースの偏りを防ぐ
+    interleaved = []
+    for group in zip_longest(*by_source):
+        for article in group:
+            if article is not None:
+                interleaved.append(article)
+
+    return interleaved
 
 
 def build_message(articles):
