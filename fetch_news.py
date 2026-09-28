@@ -1,77 +1,64 @@
 """
-教育・出産・子育て関連ニュースからお金に関わる記事をピックアップし、
+大手・信頼度の高いニュースサイトから経済・お金に関わる記事をピックアップし、
 LINE公式アカウントのBroadcast APIで1日1回配信するスクリプト。
 
 GitHub Actions の日次cronから実行される想定。
 """
 import os
 import time
+from urllib.parse import quote_plus
+
 import feedparser
 import requests
 
 LINE_BROADCAST_URL = "https://api.line.me/v2/bot/message/broadcast"
 
+# --- 信頼できる情報源として限定する大手メディアのドメイン ---
+TRUSTED_DOMAINS = [
+    "nhk.or.jp",       # NHK
+    "nikkei.com",      # 日本経済新聞
+    "reuters.com",     # ロイター
+    "jiji.com",        # 時事通信
+    "asahi.com",       # 朝日新聞
+    "yomiuri.co.jp",   # 読売新聞
+    "mainichi.jp",     # 毎日新聞
+    "kyodonews.jp",    # 共同通信
+    "toyokeizai.net",  # 東洋経済オンライン
+    "diamond.jp",      # ダイヤモンド・オンライン
+]
+
+# 経済全体の大きな動き(重要トピック側)
+MACRO_KEYWORDS = [
+    "経済", "物価", "金利", "円安", "円高", "日銀", "税制", "社会保険",
+    "年金", "最低賃金", "賃上げ", "株価", "インフレ",
+]
+
+# FPの活動(家計相談・情報発信)に直結する個人のお金の話題(細かいネタ側)
+PERSONAL_FINANCE_KEYWORDS = [
+    "家計", "NISA", "iDeCo", "保険", "住宅ローン", "児童手当", "扶養控除",
+    "相続", "贈与税", "ふるさと納税", "教育費", "奨学金", "医療費", "介護",
+    "年収の壁", "確定申告", "消費税",
+]
+
+
+def google_news_url(keywords, domains=TRUSTED_DOMAINS, when="1d"):
+    keyword_part = " OR ".join(keywords)
+    site_part = " OR ".join(f"site:{d}" for d in domains)
+    query = f"{keyword_part} ({site_part}) when:{when}"
+    return f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=ja&gl=JP&ceid=JP:ja"
+
+
 # --- ニュースソース定義 ---
-# kind="edu":    教育・子育て専門サイト。お金キーワードでフィルタする。
-# kind="money":  お金専門サイト。子育て・教育キーワードでフィルタする。
-# kind="general":一般ニュース(Yahoo!ニュースなど)。お金キーワードでフィルタする。
-# kind="google": Googleニュースの複合キーワード検索。検索クエリ自体で絞り込み済みのためフィルタ不要。
+# いずれも「経済ニュースであること」または「信頼できる大手メディアの経済・お金関連記事であること」で
+# 事前に絞り込み済みのため、記事単位でのキーワード再フィルタは行わない。
 SOURCES = [
-    {"name": "リセマム", "url": "https://resemom.jp/rss20/index.rdf", "kind": "edu"},
-    {"name": "こどもまなび☆ラボ", "url": "https://kodomo-manabi-labo.net/feed", "kind": "edu"},
-    {"name": "ファイナンシャルフィールド", "url": "https://financial-field.com/feed", "kind": "money"},
-    {"name": "マネーの達人", "url": "https://manetatsu.com/rss20/index.rdf", "kind": "money"},
-    {"name": "Yahoo!ニュース(経済)", "url": "https://news.yahoo.co.jp/rss/topics/business.xml", "kind": "money"},
-    {"name": "Yahoo!ニュース(国内)", "url": "https://news.yahoo.co.jp/rss/topics/domestic.xml", "kind": "edu"},
-    {
-        "name": "Google News",
-        "url": (
-            "https://news.google.com/rss/search?q="
-            "%E5%85%90%E7%AB%A5%E6%89%8B%E5%BD%93+OR+%E5%AD%A6%E8%B3%87%E4%BF%9D%E9%99%BA+OR+"
-            "%E4%BF%9D%E8%82%B2%E6%96%99+OR+%E9%AB%98%E6%A0%A1%E7%84%A1%E5%84%9F%E5%8C%96+OR+"
-            "%E8%82%B2%E5%85%90%E4%BC%91%E6%A5%AD%E7%B5%A6%E4%BB%98+OR+%E5%87%BA%E7%94%A3%E4%B8%80%E6%99%82%E9%87%91+OR+"
-            "%E5%AD%90%E8%82%B2%E3%81%A6%E6%94%AF%E6%8F%B4%E9%87%91+OR+%E5%85%90%E7%AB%A5%E6%89%B6%E9%A4%8A%E6%89%8B%E5%BD%93+"
-            "when:1d&hl=ja&gl=JP&ceid=JP:ja"
-        ),
-        "kind": "google",
-    },
-    {
-        "name": "Google News",
-        "url": (
-            "https://news.google.com/rss/search?q="
-            "(%E6%95%99%E8%82%B2%E8%B2%BB+OR+%E5%A5%A8%E5%AD%A6%E9%87%91+OR+%E6%89%B6%E9%A4%8A%E6%8E%A7%E9%99%A4+OR+NISA)+"
-            "(%E5%AD%90%E8%82%B2%E3%81%A6+OR+%E5%AD%90%E3%81%A9%E3%82%82)+when:1d&hl=ja&gl=JP&ceid=JP:ja"
-        ),
-        "kind": "google",
-    },
-]
-
-MONEY_KEYWORDS = [
-    "児童手当", "教育費", "学資保険", "奨学金", "NISA", "ideco", "iDeCo",
-    "扶養控除", "保育料", "高校無償化", "授業料", "出産手当金", "出産育児一時金",
-    "育児休業給付", "育休給付", "医療費控除", "学費", "貯蓄", "家計", "年収",
-    "保険料", "税制", "税金", "住民税", "所得控除", "給付金", "補助金", "助成金",
-]
-
-CHILD_EDU_KEYWORDS = [
-    "子育て", "子ども", "こども", "教育費", "児童手当", "保育", "学資", "出産",
-    "育児", "進学", "受験", "奨学金", "学校", "幼稚園", "保育園", "習い事",
-    "子供", "小学校", "中学校", "高校", "大学",
+    {"name": "Yahoo!ニュース(経済)", "url": "https://news.yahoo.co.jp/rss/topics/business.xml"},
+    {"name": "経済・政策ニュース", "url": google_news_url(MACRO_KEYWORDS)},
+    {"name": "家計・お金ニュース", "url": google_news_url(PERSONAL_FINANCE_KEYWORDS)},
 ]
 
 LOOKBACK_HOURS = 30  # 前回実行からの取りこぼしを防ぐため24時間より広めに取る
-MAX_ARTICLES = 12
-
-
-def contains_keyword(text, keywords):
-    return any(kw.lower() in text.lower() for kw in keywords)
-
-
-KEYWORDS_BY_KIND = {
-    "edu": MONEY_KEYWORDS,
-    "general": MONEY_KEYWORDS,
-    "money": CHILD_EDU_KEYWORDS,
-}
+MAX_ARTICLES = 15
 
 
 def fetch_matching_entries():
@@ -82,7 +69,6 @@ def fetch_matching_entries():
 
     for source in SOURCES:
         feed = feedparser.parse(source["url"])
-        keywords = KEYWORDS_BY_KIND.get(source["kind"])  # kind="google" -> None(フィルタ不要)
 
         for entry in feed.entries:
             published = entry.get("published_parsed") or entry.get("updated_parsed")
@@ -92,10 +78,6 @@ def fetch_matching_entries():
                     continue
 
             title = entry.get("title", "")
-            summary = entry.get("summary", "")
-            if keywords is not None and not contains_keyword(title + " " + summary, keywords):
-                continue
-
             link = entry.get("link", "")
             title_key = title[:30]
             if link in seen_links or title_key in seen_titles:
@@ -116,7 +98,7 @@ def build_message(articles):
     if not articles:
         return None
 
-    lines = ["【本日の教育・子育てお金ニュース】"]
+    lines = ["【本日の経済・お金ニュース】"]
     for article in articles[:MAX_ARTICLES]:
         lines.append(f"\n■{article['title']}（{article['source']}）\n{article['link']}")
 
