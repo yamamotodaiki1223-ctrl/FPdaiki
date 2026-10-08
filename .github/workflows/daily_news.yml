@@ -2,8 +2,11 @@ name: Daily News to LINE
 
 on:
   schedule:
-    # 22:00 UTC = 翌7:00 JST
-    - cron: "0 22 * * *"
+    # 19:00 UTC = 翌4:00 JST
+    # GitHub Actionsのスケジュール実行は混雑時に数十分〜数時間遅れることがあるため、
+    # 実際に朝7時台に届くよう逆算して早めに設定している(2026-10-08: 実測で約3時間遅延していたため調整)
+    - cron: "0 19 * * *"
+
   workflow_dispatch: {}
 
 jobs:
