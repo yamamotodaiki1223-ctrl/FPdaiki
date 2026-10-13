@@ -6,7 +6,6 @@ on:
     # GitHub Actionsのスケジュール実行は混雑時に数十分〜数時間遅れることがあるため、
     # 実際に朝7時台に届くよう逆算して早めに設定している(2026-10-08: 実測で約3時間遅延していたため調整)
     - cron: "0 19 * * *"
-
   workflow_dispatch: {}
 
 jobs:
@@ -24,3 +23,4 @@ jobs:
       - run: python fetch_news.py
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
